@@ -1,0 +1,51 @@
+@import "tailwindcss";
+@import "abcjs/abcjs-audio.css";
+
+/* ---- score paper & playback highlight ---- */
+
+.score-paper svg {
+  max-width: 100%;
+}
+
+.abcjs-note-playing,
+.abcjs-note-playing * {
+  fill: #d97706 !important;
+  stroke: #d97706 !important;
+}
+
+/* ---- abcjs audio control: soften to match the theme ---- */
+
+.abcjs-inline-audio {
+  background-color: #44403c;
+  border-radius: 0.5rem;
+}
+
+/* ---- print: score only ---- */
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+
+  html,
+  body {
+    background: white !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  #root,
+  .print-block {
+    display: block !important;
+    position: static !important;
+    height: auto !important;
+    width: auto !important;
+    max-width: none !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: white !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+}
