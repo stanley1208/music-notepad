@@ -574,7 +574,7 @@ export default function App() {
         {/* score pane */}
         <section className="print-block order-1 flex min-h-0 flex-1 flex-col min-[900px]:order-2">
           <div className="print-block min-h-0 flex-1 overflow-y-auto p-4 min-[900px]:p-6">
-            <div className="print-block relative mx-auto max-w-3xl rounded bg-white p-4 shadow-sm min-[900px]:p-6">
+            <div className="print-block relative mx-auto max-w-5xl rounded bg-white p-4 shadow-sm min-[900px]:p-6">
               <div ref={paperRef} className="score-paper" />
               {abc.trim() === '' && (
                 <p className="py-16 text-center text-sm text-stone-400">
