@@ -176,9 +176,13 @@ export default function App() {
           return
         }
 
+        // wrap re-breaks the music into systems that fit the paper, so a piece
+        // typed as one long text line doesn't engrave as one microscopic row
         const rendered = abcjs.renderAbc(paper, abc, {
           responsive: 'resize',
           add_classes: true,
+          staffwidth: Math.max(320, paper.clientWidth - 20),
+          wrap: { preferredMeasuresPerLine: 4, minSpacing: 1.8, maxSpacing: 2.7 },
         })
         visualRef.current = rendered[0]
         setBpm(Math.round(rendered[0].getBpm()))
