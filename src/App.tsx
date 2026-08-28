@@ -112,6 +112,14 @@ export default function App() {
       audioRef.current.textContent = 'Audio is not supported in this browser.'
       return
     }
+    // iOS Safari 16.4+: declare the audio as media playback so the physical
+    // ring/silent switch does not mute the Web Audio synth.
+    try {
+      const session = (navigator as unknown as { audioSession?: { type: string } }).audioSession
+      if (session) session.type = 'playback'
+    } catch {
+      // older browsers: no audioSession — nothing to do
+    }
     const cursorControl: CursorControl = {
       onStart: () => clearHighlights(),
       onEvent: (ev) => {
