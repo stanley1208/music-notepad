@@ -1,4 +1,4 @@
-import { SEED_DOCS } from './examples'
+import { SEED_DOCS, TUTORIAL_ABC } from './examples'
 
 export interface Doc {
   id: string
@@ -9,6 +9,7 @@ export interface Doc {
 
 const DOCS_KEY = 'music-notepad.docs'
 const CURRENT_KEY = 'music-notepad.currentId'
+const TUTORIAL_ADDED_KEY = 'music-notepad.tutorialAdded'
 
 function makeId(): string {
   return `doc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
@@ -19,7 +20,17 @@ export function loadDocs(): Doc[] {
     const raw = localStorage.getItem(DOCS_KEY)
     if (raw) {
       const docs = JSON.parse(raw) as Doc[]
-      if (Array.isArray(docs) && docs.length > 0) return docs
+      if (Array.isArray(docs) && docs.length > 0) {
+        // One-time migration: visitors from before the tutorial existed get it
+        // prepended once (deleting it afterwards must not resurrect it).
+        if (!localStorage.getItem(TUTORIAL_ADDED_KEY)) {
+          localStorage.setItem(TUTORIAL_ADDED_KEY, '1')
+          const migrated = [newDoc(TUTORIAL_ABC, 'Start Here'), ...docs]
+          saveDocs(migrated)
+          return migrated
+        }
+        return docs
+      }
     }
   } catch {
     // corrupted storage: fall through and reseed
@@ -30,6 +41,11 @@ export function loadDocs(): Doc[] {
     abc: d.abc,
     updatedAt: Date.now(),
   }))
+  try {
+    localStorage.setItem(TUTORIAL_ADDED_KEY, '1')
+  } catch {
+    // ignore
+  }
   saveDocs(seeded)
   return seeded
 }

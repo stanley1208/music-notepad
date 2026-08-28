@@ -54,7 +54,13 @@ export default function CheatSheet({ onInsert }: { onInsert: (snippet: string) =
   return (
     <aside className="no-print w-72 shrink-0 overflow-y-auto border-l border-stone-200 bg-stone-50 p-4">
       <h2 className="mb-1 text-sm font-semibold text-stone-700">ABC cheat sheet</h2>
-      <p className="mb-4 text-xs text-stone-500">Click any snippet to insert it at the cursor.</p>
+      <p className="mb-3 text-xs text-stone-500">Click any snippet to insert it at the cursor.</p>
+      <div className="mb-4 rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+        <span className="font-semibold">New here?</span> Notes are just letters — typing{' '}
+        <code className="font-mono">C D E F</code> in a music line draws those notes on the
+        staff. For a 5-minute lesson, open the <span className="font-semibold">Start Here</span>{' '}
+        document in the switcher at the top.
+      </div>
       {SECTIONS.map((section) => (
         <section key={section.heading} className="mb-5">
           <h3 className="mb-2 text-xs font-semibold tracking-wide text-stone-500 uppercase">

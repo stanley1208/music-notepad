@@ -46,7 +46,14 @@ export default function App() {
     () => initialRef.current!.docs.find((d) => d.id === initialRef.current!.id)?.abc ?? '',
   )
   const [error, setError] = useState<string | null>(null)
-  const [cheatOpen, setCheatOpen] = useState(false)
+  // First-ever visit: open the cheat sheet so newcomers see the reference exists.
+  const [cheatOpen, setCheatOpen] = useState(() => {
+    try {
+      return localStorage.getItem('music-notepad.visited') === null
+    } catch {
+      return false
+    }
+  })
   const [exportOpen, setExportOpen] = useState(false)
   const [bpm, setBpm] = useState<number | null>(null)
   const [savedAt, setSavedAt] = useState<number | null>(null)
@@ -79,6 +86,14 @@ export default function App() {
     }
     internals.isLoaded = false
     ctrl.setTune(visual, false).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('music-notepad.visited', '1')
+    } catch {
+      // ignore
+    }
   }, [])
 
   // ---- playback cursor ----
