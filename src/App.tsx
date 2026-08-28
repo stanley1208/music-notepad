@@ -57,12 +57,14 @@ export default function App() {
   const [exportOpen, setExportOpen] = useState(false)
   const [bpm, setBpm] = useState<number | null>(null)
   const [savedAt, setSavedAt] = useState<number | null>(null)
+  const [editorFocused, setEditorFocused] = useState(false)
   // Bumped on document switch so the render effect re-runs even when the new
   // doc's text is identical to the old one (otherwise the synth never re-arms).
   const [renderNonce, setRenderNonce] = useState(0)
 
   const paperRef = useRef<HTMLDivElement>(null)
   const audioRef = useRef<HTMLDivElement>(null)
+  const keyBarRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const synthRef = useRef<SynthObjectController | null>(null)
   const visualRef = useRef<TuneObject | null>(null)
@@ -275,19 +277,30 @@ export default function App() {
     [currentId],
   )
 
-  // ---- cheat-sheet insertion ----
-  const insertSnippet = useCallback((snippet: string) => {
+  // ---- snippet insertion (cheat sheet + mobile key bar) ----
+  // The caret is applied in an effect AFTER React commits the new value;
+  // setting it earlier races the controlled-textarea update, which resets the
+  // caret to the end.
+  const pendingCaretRef = useRef<number | null>(null)
+  const insertSnippet = useCallback((snippet: string, caretOffset?: number) => {
     const ta = textareaRef.current
     const text = abcRef.current
     const start = ta?.selectionStart ?? text.length
     const end = ta?.selectionEnd ?? start
+    pendingCaretRef.current = start + (caretOffset ?? snippet.length)
     setAbc(text.slice(0, start) + snippet + text.slice(end))
-    requestAnimationFrame(() => {
-      if (!ta) return
-      ta.focus()
-      ta.selectionStart = ta.selectionEnd = start + snippet.length
-    })
   }, [])
+
+  useEffect(() => {
+    if (pendingCaretRef.current === null) return
+    const caret = pendingCaretRef.current
+    pendingCaretRef.current = null
+    const ta = textareaRef.current
+    if (ta) {
+      ta.focus()
+      ta.selectionStart = ta.selectionEnd = caret
+    }
+  }, [abc])
 
   // ---- playback ----
   const togglePlay = useCallback(() => {
@@ -355,6 +368,27 @@ export default function App() {
     return () => clearTimeout(t)
   }, [savedAt])
 
+  // ---- mobile key bar: pin above the on-screen keyboard ----
+  // Android (with interactive-widget=resizes-content) shrinks the layout
+  // viewport, so bottom:0 is already right; iOS keeps the layout viewport and
+  // only shrinks the visual viewport, so we lift the bar by the difference.
+  useEffect(() => {
+    if (!editorFocused) return
+    const vv = window.visualViewport
+    if (!vv) return
+    const update = () => {
+      const lift = Math.max(0, window.innerHeight - vv.height - vv.offsetTop)
+      keyBarRef.current?.style.setProperty('bottom', `${lift}px`)
+    }
+    update()
+    vv.addEventListener('resize', update)
+    vv.addEventListener('scroll', update)
+    return () => {
+      vv.removeEventListener('resize', update)
+      vv.removeEventListener('scroll', update)
+    }
+  }, [editorFocused])
+
   const errorLines = error ? error.split('\n') : []
 
   return (
@@ -375,7 +409,7 @@ export default function App() {
           value={currentId}
           onChange={(e) => switchDoc(e.target.value)}
           aria-label="Switch document"
-          className="max-w-48 rounded border border-stone-200 bg-white px-2 py-1 text-sm"
+          className="max-w-48 rounded border border-stone-200 bg-white px-2 py-2 text-sm min-[900px]:py-1"
         >
           {docs.map((d) => (
             <option key={d.id} value={d.id}>
@@ -386,14 +420,14 @@ export default function App() {
         <button
           type="button"
           onClick={createDoc}
-          className="rounded border border-stone-200 px-2 py-1 text-sm hover:bg-stone-50"
+          className="rounded border border-stone-200 px-2 py-2 text-sm hover:bg-stone-50 min-[900px]:py-1"
         >
           New
         </button>
         <button
           type="button"
           onClick={deleteDoc}
-          className="rounded border border-stone-200 px-2 py-1 text-sm text-red-700 hover:bg-red-50"
+          className="rounded border border-stone-200 px-2 py-2 text-sm text-red-700 hover:bg-red-50 min-[900px]:py-1"
         >
           Delete
         </button>
@@ -404,7 +438,7 @@ export default function App() {
           type="button"
           onClick={togglePlay}
           title="Play / pause (Ctrl+Enter)"
-          className="rounded bg-amber-600 px-3 py-1 text-sm font-medium text-white hover:bg-amber-700"
+          className="rounded bg-amber-600 px-3 py-2 text-sm font-medium text-white hover:bg-amber-700 min-[900px]:py-1"
         >
           ▶ Play / Pause
         </button>
@@ -416,7 +450,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setExportOpen((v) => !v)}
-              className="rounded border border-stone-200 px-2 py-1 text-sm hover:bg-stone-50"
+              className="rounded border border-stone-200 px-2 py-2 text-sm hover:bg-stone-50 min-[900px]:py-1"
             >
               Export ▾
             </button>
@@ -450,7 +484,7 @@ export default function App() {
             type="button"
             onClick={() => setCheatOpen((v) => !v)}
             title="Toggle cheat sheet (Ctrl+/)"
-            className={`rounded border px-2 py-1 text-sm ${
+            className={`rounded border px-2 py-2 text-sm min-[900px]:py-1 ${
               cheatOpen
                 ? 'border-amber-400 bg-amber-50 text-amber-800'
                 : 'border-stone-200 hover:bg-stone-50'
@@ -463,16 +497,23 @@ export default function App() {
 
       {/* ---- main split ---- */}
       <main className="print-block flex min-h-0 flex-1 flex-col min-[900px]:flex-row">
-        {/* editor pane */}
-        <section className="no-print flex min-h-0 basis-2/5 flex-col border-b border-stone-200 min-[900px]:border-r min-[900px]:border-b-0">
+        {/* editor pane — below the score on phones so the music stays visible
+            while the on-screen keyboard is open */}
+        <section
+          className={`no-print order-2 flex min-h-0 basis-2/5 flex-col border-t border-stone-200 min-[900px]:order-1 min-[900px]:border-t-0 min-[900px]:border-r ${
+            editorFocused ? 'max-[899px]:pb-12' : ''
+          }`}
+        >
           <textarea
             ref={textareaRef}
             value={abc}
             onChange={(e) => setAbc(e.target.value)}
+            onFocus={() => setEditorFocused(true)}
+            onBlur={() => setEditorFocused(false)}
             spellCheck={false}
             aria-label="ABC notation editor"
             placeholder={'Type ABC notation here…\n\nTry:  C D E F | G2 [ceg]2 | c4 |]\nOpen the cheat sheet with Ctrl+/'}
-            className="min-h-0 flex-1 resize-none bg-white p-4 font-mono text-sm leading-relaxed focus:outline-none"
+            className="min-h-0 flex-1 resize-none bg-white p-4 font-mono text-base leading-relaxed focus:outline-none min-[900px]:text-sm"
           />
           {error && (
             <div
@@ -486,8 +527,40 @@ export default function App() {
           )}
         </section>
 
+        {/* one-tap ABC symbols while typing on a phone */}
+        {editorFocused && (
+          <div
+            ref={keyBarRef}
+            className="no-print fixed inset-x-0 bottom-0 z-40 flex gap-1 overflow-x-auto border-t border-stone-300 bg-stone-200 px-2 py-1.5 min-[900px]:hidden"
+          >
+            {[
+              { label: '|', insert: '|' },
+              { label: '[ ]', insert: '[]', caret: 1 },
+              { label: '♯ ^', insert: '^' },
+              { label: '♭ _', insert: '_' },
+              { label: '♮ =', insert: '=' },
+              { label: ',', insert: ',' },
+              { label: "'", insert: "'" },
+              { label: 'z', insert: 'z' },
+              { label: '2', insert: '2' },
+              { label: '/2', insert: '/2' },
+              { label: '|]', insert: '|]' },
+            ].map((k) => (
+              <button
+                key={k.label}
+                type="button"
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={() => insertSnippet(k.insert, k.caret)}
+                className="min-h-10 min-w-10 shrink-0 rounded bg-white px-2 font-mono text-base text-stone-800 shadow-sm active:bg-amber-100"
+              >
+                {k.label}
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* score pane */}
-        <section className="print-block flex min-h-0 flex-1 flex-col">
+        <section className="print-block order-1 flex min-h-0 flex-1 flex-col min-[900px]:order-2">
           <div className="print-block min-h-0 flex-1 overflow-y-auto p-4 min-[900px]:p-6">
             <div className="print-block relative mx-auto max-w-3xl rounded bg-white p-4 shadow-sm min-[900px]:p-6">
               <div ref={paperRef} className="score-paper" />
@@ -504,7 +577,9 @@ export default function App() {
         </section>
 
         {/* cheat sheet */}
-        {cheatOpen && <CheatSheet onInsert={insertSnippet} />}
+        {cheatOpen && (
+          <CheatSheet onInsert={insertSnippet} onClose={() => setCheatOpen(false)} />
+        )}
       </main>
     </div>
   )

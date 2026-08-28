@@ -50,10 +50,26 @@ const SECTIONS: Section[] = [
   },
 ]
 
-export default function CheatSheet({ onInsert }: { onInsert: (snippet: string) => void }) {
+export default function CheatSheet({
+  onInsert,
+  onClose,
+}: {
+  onInsert: (snippet: string) => void
+  onClose: () => void
+}) {
   return (
-    <aside className="no-print w-72 shrink-0 overflow-y-auto border-l border-stone-200 bg-stone-50 p-4">
-      <h2 className="mb-1 text-sm font-semibold text-stone-700">ABC cheat sheet</h2>
+    <aside className="no-print fixed inset-x-0 bottom-0 z-30 max-h-[65vh] overflow-y-auto rounded-t-2xl border-t border-stone-300 bg-stone-50 p-4 shadow-[0_-8px_24px_rgba(0,0,0,0.15)] min-[900px]:static min-[900px]:z-auto min-[900px]:max-h-none min-[900px]:w-72 min-[900px]:shrink-0 min-[900px]:rounded-none min-[900px]:border-t-0 min-[900px]:border-l min-[900px]:border-stone-200 min-[900px]:shadow-none">
+      <div className="mb-1 flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-stone-700">ABC cheat sheet</h2>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close cheat sheet"
+          className="rounded px-3 py-1.5 text-sm text-stone-500 hover:bg-stone-200 min-[900px]:hidden"
+        >
+          ✕ Close
+        </button>
+      </div>
       <p className="mb-3 text-xs text-stone-500">Click any snippet to insert it at the cursor.</p>
       <div className="mb-4 rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
         <span className="font-semibold">New here?</span> Notes are just letters — typing{' '}
@@ -66,13 +82,13 @@ export default function CheatSheet({ onInsert }: { onInsert: (snippet: string) =
           <h3 className="mb-2 text-xs font-semibold tracking-wide text-stone-500 uppercase">
             {section.heading}
           </h3>
-          <ul className="space-y-1">
+          <ul className="space-y-1.5 min-[900px]:space-y-1">
             {section.rows.map((row) => (
               <li key={row.snippet} className="flex items-baseline gap-2">
                 <button
                   type="button"
                   onClick={() => onInsert(row.snippet)}
-                  className="shrink-0 rounded bg-white px-1.5 py-0.5 font-mono text-xs text-stone-800 ring-1 ring-stone-200 hover:bg-amber-50 hover:ring-amber-300"
+                  className="min-h-10 shrink-0 rounded bg-white px-2.5 py-2 font-mono text-sm text-stone-800 ring-1 ring-stone-200 hover:bg-amber-50 hover:ring-amber-300 min-[900px]:min-h-0 min-[900px]:px-1.5 min-[900px]:py-0.5 min-[900px]:text-xs"
                   title="Insert at cursor"
                 >
                   {row.snippet}

@@ -20,6 +20,23 @@
   border-radius: 0.5rem;
 }
 
+/* thumb-sized audio controls on phones */
+@media (max-width: 899px) {
+  .abcjs-inline-audio {
+    height: 44px;
+  }
+  .abcjs-inline-audio .abcjs-btn {
+    width: 40px;
+    height: 40px;
+    padding: 8px 6px;
+  }
+  .abcjs-inline-audio .abcjs-midi-tempo {
+    font-size: 16px;
+    height: 30px;
+    width: 52px;
+  }
+}
+
 /* ---- print: score only ---- */
 
 @media print {
