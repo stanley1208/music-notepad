@@ -8,6 +8,16 @@ interface Section {
   rows: Row[]
 }
 
+// Reference-only rows: explain the one-time setup block. Deliberately not
+// clickable — inserting these mid-document would corrupt it.
+const SETUP_LINES: Row[] = [
+  { snippet: 'X:1', label: 'song number — always the first line, never changes' },
+  { snippet: 'T:Warm-up', label: 'title printed on the sheet music' },
+  { snippet: '%%score { 1 | 2 }', label: 'brace both hands into one piano system' },
+  { snippet: '[V:1]', label: 'starts the right-hand music line' },
+  { snippet: '[V:2]', label: 'starts the left-hand music line' },
+]
+
 const SECTIONS: Section[] = [
   {
     heading: 'Notes & octaves',
@@ -77,6 +87,24 @@ export default function CheatSheet({
         staff. For a 5-minute lesson, open the <span className="font-semibold">Start Here</span>{' '}
         document in the switcher at the top.
       </div>
+      <section className="mb-5">
+        <h3 className="mb-2 text-xs font-semibold tracking-wide text-stone-500 uppercase">
+          Setup lines (top of every doc)
+        </h3>
+        <p className="mb-2 text-xs text-stone-500">
+          Copied in automatically — you rarely edit these, and clicking them here does nothing.
+        </p>
+        <ul className="space-y-1.5 min-[900px]:space-y-1">
+          {SETUP_LINES.map((row) => (
+            <li key={row.snippet} className="flex items-baseline gap-2">
+              <code className="shrink-0 rounded bg-stone-100 px-2 py-1 font-mono text-xs text-stone-700 ring-1 ring-stone-200">
+                {row.snippet}
+              </code>
+              <span className="text-xs text-stone-600">{row.label}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
       {SECTIONS.map((section) => (
         <section key={section.heading} className="mb-5">
           <h3 className="mb-2 text-xs font-semibold tracking-wide text-stone-500 uppercase">
