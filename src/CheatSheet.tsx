@@ -1,6 +1,7 @@
 interface Row {
   snippet: string
   label: string
+  kind?: 'header'
 }
 
 interface Section {
@@ -50,12 +51,12 @@ const SECTIONS: Section[] = [
   {
     heading: 'Headers',
     rows: [
-      { snippet: 'M:4/4', label: 'meter' },
-      { snippet: 'L:1/4', label: 'unit note length' },
-      { snippet: 'Q:1/4=100', label: 'tempo' },
-      { snippet: 'K:G', label: 'key (K:G = one sharp)' },
-      { snippet: 'V:1 clef=treble', label: 'voice: right hand' },
-      { snippet: 'V:2 clef=bass', label: 'voice: left hand' },
+      { snippet: 'M:4/4', label: 'meter', kind: 'header' },
+      { snippet: 'L:1/4', label: 'unit note length', kind: 'header' },
+      { snippet: 'Q:1/4=100', label: 'tempo', kind: 'header' },
+      { snippet: 'K:G', label: 'key (K:G = one sharp)', kind: 'header' },
+      { snippet: 'V:1 clef=treble', label: 'voice: right hand', kind: 'header' },
+      { snippet: 'V:2 clef=bass', label: 'voice: left hand', kind: 'header' },
     ],
   },
 ]
@@ -64,7 +65,7 @@ export default function CheatSheet({
   onInsert,
   onClose,
 }: {
-  onInsert: (snippet: string) => void
+  onInsert: (snippet: string, opts?: { kind?: 'music' | 'header' }) => void
   onClose: () => void
 }) {
   return (
@@ -115,7 +116,7 @@ export default function CheatSheet({
               <li key={row.snippet} className="flex items-baseline gap-2">
                 <button
                   type="button"
-                  onClick={() => onInsert(row.snippet)}
+                  onClick={() => onInsert(row.snippet, { kind: row.kind ?? 'music' })}
                   className="min-h-10 shrink-0 rounded bg-white px-2.5 py-2 font-mono text-sm text-stone-800 ring-1 ring-stone-200 hover:bg-amber-50 hover:ring-amber-300 min-[900px]:min-h-0 min-[900px]:px-1.5 min-[900px]:py-0.5 min-[900px]:text-xs"
                   title="Insert at cursor"
                 >

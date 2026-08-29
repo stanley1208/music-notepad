@@ -215,7 +215,20 @@ export default function App() {
         })
         visualRef.current = rendered[0]
         setBpm(Math.round(rendered[0].getBpm()))
-        setError(null)
+        // abcjs paints text it can't interpret in red (class abcjs-debug-msg)
+        // without reporting a warning — surface it in the strip as words
+        const redInk = [
+          ...new Set(
+            [...paper.querySelectorAll('.abcjs-debug-msg')]
+              .map((t) => (t.textContent ?? '').trim())
+              .filter(Boolean),
+          ),
+        ]
+        setError(
+          redInk.length > 0
+            ? `The score couldn't understand ${redInk.map((m) => `"${m}"`).join(', ')} — it's shown in red on the score. Check that line for typos.`
+            : null,
+        )
         setTuneFresh(rendered[0])
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
@@ -323,14 +336,55 @@ export default function App() {
   // setting it earlier races the controlled-textarea update, which resets the
   // caret to the end.
   const pendingCaretRef = useRef<number | null>(null)
-  const insertSnippet = useCallback((snippet: string, caretOffset?: number) => {
-    const ta = textareaRef.current
-    const text = abcRef.current
-    const start = ta?.selectionStart ?? text.length
-    const end = ta?.selectionEnd ?? start
-    pendingCaretRef.current = start + (caretOffset ?? snippet.length)
-    setAbc(text.slice(0, start) + snippet + text.slice(end))
-  }, [])
+
+  // Settings lines (X: T: K: V: … and % directives/comments) must never
+  // receive note snippets — a stray click there silently corrupts the doc.
+  const isSettingsLine = (line: string) => /^\s*(?:[A-Za-z]:|%)/.test(line)
+
+  // End of the first music line, just before a trailing |] if there is one.
+  const musicInsertPos = (text: string): number => {
+    let offset = 0
+    for (const line of text.split('\n')) {
+      if (/^\s*\[V:/.test(line)) {
+        const tail = line.match(/\s*\|\]\s*$/)
+        return offset + (tail ? line.length - tail[0].length : line.length)
+      }
+      offset += line.length + 1
+    }
+    return text.length
+  }
+
+  const insertSnippet = useCallback(
+    (snippet: string, opts?: { caretOffset?: number; kind?: 'music' | 'header' }) => {
+      const ta = textareaRef.current
+      const text = abcRef.current
+      let start = ta?.selectionStart ?? text.length
+      let end = ta?.selectionEnd ?? start
+      let insertText = snippet
+      let caretInInsert = opts?.caretOffset ?? snippet.length
+
+      const lineStart = text.lastIndexOf('\n', start - 1) + 1
+      const lineEndRaw = text.indexOf('\n', start)
+      const currentLine = text.slice(lineStart, lineEndRaw === -1 ? text.length : lineEndRaw)
+
+      if (opts?.kind === 'header') {
+        // a header belongs on its own line: insert above the current line
+        start = end = lineStart
+        insertText = snippet + '\n'
+        caretInInsert = snippet.length
+      } else if (isSettingsLine(currentLine)) {
+        // note snippet clicked while the caret sits in a settings line:
+        // redirect it to the end of the melody line instead
+        start = end = musicInsertPos(text)
+        insertText = ' ' + snippet
+        caretInInsert = 1 + (opts?.caretOffset ?? snippet.length)
+      }
+
+      pendingCaretRef.current = start + caretInInsert
+      setAbc(text.slice(0, start) + insertText + text.slice(end))
+    },
+    [],
+  )
 
   useEffect(() => {
     if (pendingCaretRef.current === null) return
@@ -591,7 +645,7 @@ export default function App() {
                 key={k.label}
                 type="button"
                 onPointerDown={(e) => e.preventDefault()}
-                onClick={() => insertSnippet(k.insert, k.caret)}
+                onClick={() => insertSnippet(k.insert, { caretOffset: k.caret })}
                 className="min-h-10 min-w-10 shrink-0 rounded bg-white px-2 font-mono text-base text-stone-800 shadow-sm active:bg-amber-100"
               >
                 {k.label}
