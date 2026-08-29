@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useRegisterSW } from 'virtual:pwa-register/react'
 import abcjs from 'abcjs'
 import type { CursorControl, SynthObjectController, TuneObject } from 'abcjs'
 import CheatSheet from './CheatSheet'
@@ -58,6 +59,34 @@ export default function App() {
   const [bpm, setBpm] = useState<number | null>(null)
   const [savedAt, setSavedAt] = useState<number | null>(null)
   const [editorFocused, setEditorFocused] = useState(false)
+
+  // PWA: service-worker registration + "update ready" prompt
+  const {
+    needRefresh: [needRefresh],
+    updateServiceWorker,
+  } = useRegisterSW()
+
+  // iPhone/iPad Safari has no automatic install prompt — show a one-time hint
+  const [showIosHint, setShowIosHint] = useState(() => {
+    try {
+      if (localStorage.getItem('music-notepad.iosHintDismissed')) return false
+      const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent)
+      const standalone =
+        (navigator as unknown as { standalone?: boolean }).standalone === true ||
+        window.matchMedia('(display-mode: standalone)').matches
+      return isIos && !standalone
+    } catch {
+      return false
+    }
+  })
+  const dismissIosHint = useCallback(() => {
+    setShowIosHint(false)
+    try {
+      localStorage.setItem('music-notepad.iosHintDismissed', '1')
+    } catch {
+      // ignore
+    }
+  }, [])
   // Bumped on document switch so the render effect re-runs even when the new
   // doc's text is identical to the old one (otherwise the synth never re-arms).
   const [renderNonce, setRenderNonce] = useState(0)
@@ -593,6 +622,38 @@ export default function App() {
           <CheatSheet onInsert={insertSnippet} onClose={() => setCheatOpen(false)} />
         )}
       </main>
+
+      {/* PWA: a new version has been downloaded */}
+      {needRefresh && (
+        <div className="no-print fixed right-4 bottom-4 z-50 flex items-center gap-3 rounded-lg bg-stone-800 px-4 py-3 text-sm text-white shadow-lg">
+          <span>Update ready</span>
+          <button
+            type="button"
+            onClick={() => updateServiceWorker(true)}
+            className="rounded bg-amber-500 px-3 py-1.5 font-medium text-stone-900 hover:bg-amber-400"
+          >
+            Refresh
+          </button>
+        </div>
+      )}
+
+      {/* iOS install hint */}
+      {showIosHint && (
+        <div className="no-print fixed inset-x-3 bottom-3 z-50 flex items-center gap-2 rounded-lg bg-stone-800 px-3 py-2.5 text-xs text-white shadow-lg min-[900px]:hidden">
+          <span className="flex-1">
+            Install this app: tap <span className="font-semibold">Share</span> then{' '}
+            <span className="font-semibold">Add to Home Screen</span>
+          </span>
+          <button
+            type="button"
+            onClick={dismissIosHint}
+            aria-label="Dismiss install hint"
+            className="rounded px-2 py-1.5 text-stone-300 hover:bg-stone-700"
+          >
+            ✕
+          </button>
+        </div>
+      )}
     </div>
   )
 }
