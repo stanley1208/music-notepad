@@ -3,6 +3,8 @@ import { useRegisterSW } from 'virtual:pwa-register/react'
 import abcjs from 'abcjs'
 import type { CursorControl, SynthObjectController, TuneObject } from 'abcjs'
 import CheatSheet from './CheatSheet'
+import SimpleEditor from './SimpleEditor'
+import { buildSimple, parseSimple, type SimpleFields } from './simple'
 import { TEMPLATE_ABC } from './examples'
 import {
   loadCurrentId,
@@ -59,6 +61,23 @@ export default function App() {
   const [bpm, setBpm] = useState<number | null>(null)
   const [savedAt, setSavedAt] = useState<number | null>(null)
   const [editorFocused, setEditorFocused] = useState(false)
+  // Simple mode: friendly two-hand view; Advanced: the raw text editor
+  const [editorMode, setEditorMode] = useState<'simple' | 'advanced'>(() => {
+    try {
+      return localStorage.getItem('music-notepad.editorMode') === 'advanced'
+        ? 'advanced'
+        : 'simple'
+    } catch {
+      return 'simple'
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem('music-notepad.editorMode', editorMode)
+    } catch {
+      // ignore
+    }
+  }, [editorMode])
 
   // PWA: service-worker registration + "update ready" prompt
   const {
@@ -94,6 +113,12 @@ export default function App() {
   const paperRef = useRef<HTMLDivElement>(null)
   const audioRef = useRef<HTMLDivElement>(null)
   const keyBarRef = useRef<HTMLDivElement>(null)
+  const rhRef = useRef<HTMLTextAreaElement>(null)
+  const lhRef = useRef<HTMLTextAreaElement>(null)
+  const activeHandRef = useRef<'rh' | 'lh'>('rh')
+  // Until a hand box has been focused, its reported caret position (0) is
+  // meaningless — inserts then go to the END of the melody, not before it.
+  const handTouchedRef = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const synthRef = useRef<SynthObjectController | null>(null)
   const visualRef = useRef<TuneObject | null>(null)
@@ -101,6 +126,27 @@ export default function App() {
   abcRef.current = abc
 
   const currentDoc = docs.find((d) => d.id === currentId)
+
+  // Simple-mode view over the current ABC (cheap; abc is small)
+  const simple = parseSimple(abc)
+  // Latch: once a doc is shown as text, stay there even if an edit makes it
+  // canonical again — otherwise the editor would flip out from under a typing
+  // user. Cleared on doc switches and by clicking the Simple button.
+  const [advancedLatch, setAdvancedLatch] = useState(false)
+  const effectiveMode: 'simple' | 'advanced' =
+    editorMode === 'simple' && simple.compatible && !advancedLatch ? 'simple' : 'advanced'
+  useEffect(() => {
+    if (editorMode === 'simple' && !simple.compatible) setAdvancedLatch(true)
+  }, [editorMode, simple.compatible])
+
+  const changeSimple = useCallback(
+    (patch: Partial<SimpleFields>) => {
+      const parsed = parseSimple(abcRef.current)
+      if (!parsed.compatible) return
+      setAbc(buildSimple({ ...parsed.fields, ...patch }))
+    },
+    [],
+  )
 
   // abcjs 6.7: SynthController.setTune(visual, false) never clears the internal
   // isLoaded flag, so once any tune has been primed, Play keeps replaying the old
@@ -282,45 +328,51 @@ export default function App() {
     clearHighlights()
   }, [clearHighlights])
 
+  const resetPerDocEditingState = useCallback(() => {
+    pendingCaretRef.current = null
+    handTouchedRef.current = false
+    setAdvancedLatch(false)
+  }, [])
+
   const switchDoc = useCallback(
     (id: string) => {
       if (id === currentId) return
       flushCurrent()
       stopPlayback()
-      setDocs((prev) => {
-        const doc = prev.find((d) => d.id === id)
-        if (doc) setAbc(doc.abc)
-        return prev
-      })
+      resetPerDocEditingState()
+      const doc = docs.find((d) => d.id === id)
+      if (doc) setAbc(doc.abc)
       setCurrentId(id)
       setRenderNonce((n) => n + 1)
     },
-    [currentId, flushCurrent, stopPlayback],
+    [currentId, docs, flushCurrent, stopPlayback, resetPerDocEditingState],
   )
 
   const createDoc = useCallback(() => {
     flushCurrent()
     stopPlayback()
+    resetPerDocEditingState()
     const doc = newDoc(TEMPLATE_ABC)
     setDocs((prev) => [...prev, doc])
     setAbc(doc.abc)
     setCurrentId(doc.id)
     setRenderNonce((n) => n + 1)
-  }, [flushCurrent, stopPlayback])
+  }, [flushCurrent, stopPlayback, resetPerDocEditingState])
 
   const deleteDoc = useCallback(() => {
     if (!currentDoc) return
     if (!window.confirm(`Delete "${currentDoc.title}"? This cannot be undone.`)) return
     stopPlayback()
-    setDocs((prev) => {
-      let next = prev.filter((d) => d.id !== currentId)
-      if (next.length === 0) next = [newDoc(TEMPLATE_ABC)]
-      setCurrentId(next[0].id)
-      setAbc(next[0].abc)
-      return next
-    })
+    resetPerDocEditingState()
+    // computed outside the setDocs updater: updaters must stay pure (React
+    // double-invokes them in StrictMode, and newDoc creates fresh random ids)
+    const remaining = docs.filter((d) => d.id !== currentId)
+    const next = remaining.length > 0 ? remaining : [newDoc(TEMPLATE_ABC)]
+    setDocs(next)
+    setCurrentId(next[0].id)
+    setAbc(next[0].abc)
     setRenderNonce((n) => n + 1)
-  }, [currentDoc, currentId, stopPlayback])
+  }, [currentDoc, currentId, docs, stopPlayback, resetPerDocEditingState])
 
   const renameDoc = useCallback(
     (title: string) => {
@@ -335,7 +387,9 @@ export default function App() {
   // The caret is applied in an effect AFTER React commits the new value;
   // setting it earlier races the controlled-textarea update, which resets the
   // caret to the end.
-  const pendingCaretRef = useRef<number | null>(null)
+  const pendingCaretRef = useRef<{ target: 'main' | 'rh' | 'lh'; pos: number } | null>(null)
+  const modeRef = useRef(effectiveMode)
+  modeRef.current = effectiveMode
 
   // Settings lines (X: T: K: V: … and % directives/comments) must never
   // receive note snippets — a stray click there silently corrupts the doc.
@@ -356,6 +410,28 @@ export default function App() {
 
   const insertSnippet = useCallback(
     (snippet: string, opts?: { caretOffset?: number; kind?: 'music' | 'header' }) => {
+      if (modeRef.current === 'simple') {
+        // headers are toolbar controls in Simple mode — nothing to insert
+        if (opts?.kind === 'header') return
+        const parsed = parseSimple(abcRef.current)
+        if (!parsed.compatible) return
+        const hand = activeHandRef.current
+        const ta = (hand === 'rh' ? rhRef : lhRef).current
+        const handText = parsed.fields[hand]
+        const start = handTouchedRef.current
+          ? (ta?.selectionStart ?? handText.length)
+          : handText.length
+        const end = handTouchedRef.current ? (ta?.selectionEnd ?? start) : handText.length
+        pendingCaretRef.current = { target: hand, pos: start + (opts?.caretOffset ?? snippet.length) }
+        setAbc(
+          buildSimple({
+            ...parsed.fields,
+            [hand]: handText.slice(0, start) + snippet + handText.slice(end),
+          }),
+        )
+        return
+      }
+
       const ta = textareaRef.current
       const text = abcRef.current
       let start = ta?.selectionStart ?? text.length
@@ -380,7 +456,7 @@ export default function App() {
         caretInInsert = 1 + (opts?.caretOffset ?? snippet.length)
       }
 
-      pendingCaretRef.current = start + caretInInsert
+      pendingCaretRef.current = { target: 'main', pos: start + caretInInsert }
       setAbc(text.slice(0, start) + insertText + text.slice(end))
     },
     [],
@@ -388,12 +464,13 @@ export default function App() {
 
   useEffect(() => {
     if (pendingCaretRef.current === null) return
-    const caret = pendingCaretRef.current
+    const { target, pos } = pendingCaretRef.current
     pendingCaretRef.current = null
-    const ta = textareaRef.current
+    const ta =
+      target === 'main' ? textareaRef.current : target === 'rh' ? rhRef.current : lhRef.current
     if (ta) {
       ta.focus()
-      ta.selectionStart = ta.selectionEnd = caret
+      ta.selectionStart = ta.selectionEnd = pos
     }
   }, [abc])
 
@@ -599,17 +676,66 @@ export default function App() {
             editorFocused ? 'max-[899px]:pb-12' : ''
           }`}
         >
-          <textarea
-            ref={textareaRef}
-            value={abc}
-            onChange={(e) => setAbc(e.target.value)}
-            onFocus={() => setEditorFocused(true)}
-            onBlur={() => setEditorFocused(false)}
-            spellCheck={false}
-            aria-label="ABC notation editor"
-            placeholder={'Type ABC notation here…\n\nTry:  C D E F | G2 [ceg]2 | c4 |]\nOpen the cheat sheet with Ctrl+/'}
-            className="min-h-0 flex-1 resize-none bg-white p-4 font-mono text-base leading-relaxed focus:outline-none min-[900px]:text-sm"
-          />
+          <div className="flex items-center gap-1 border-b border-stone-200 bg-stone-50 px-2 py-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                setEditorMode('simple')
+                setAdvancedLatch(false)
+              }}
+              className={`rounded px-3 py-1.5 text-xs font-medium min-[900px]:py-1 ${
+                effectiveMode === 'simple'
+                  ? 'bg-amber-100 text-amber-900 ring-1 ring-amber-300'
+                  : 'text-stone-500 hover:bg-stone-100'
+              }`}
+            >
+              Simple
+            </button>
+            <button
+              type="button"
+              onClick={() => setEditorMode('advanced')}
+              className={`rounded px-3 py-1.5 text-xs font-medium min-[900px]:py-1 ${
+                effectiveMode === 'advanced'
+                  ? 'bg-amber-100 text-amber-900 ring-1 ring-amber-300'
+                  : 'text-stone-500 hover:bg-stone-100'
+              }`}
+            >
+              Advanced
+            </button>
+            {editorMode === 'simple' && effectiveMode === 'advanced' && (
+              <span className="ml-2 text-xs text-stone-400">
+                {simple.compatible
+                  ? 'Shown as text — click Simple to switch back'
+                  : 'This document uses advanced features — shown as text'}
+              </span>
+            )}
+          </div>
+          {effectiveMode === 'simple' ? (
+            <SimpleEditor
+              fields={simple.fields}
+              onChange={changeSimple}
+              rhRef={rhRef}
+              lhRef={lhRef}
+              onHandFocus={(hand) => {
+                activeHandRef.current = hand
+                handTouchedRef.current = true
+                setEditorFocused(true)
+              }}
+              onHandBlur={() => setEditorFocused(false)}
+            />
+          ) : (
+            <textarea
+              ref={textareaRef}
+              value={abc}
+              onChange={(e) => setAbc(e.target.value)}
+              onFocus={() => setEditorFocused(true)}
+              onBlur={() => setEditorFocused(false)}
+              spellCheck={false}
+              aria-label="ABC notation editor"
+              placeholder={'Type ABC notation here…\n\nTry:  C D E F | G2 [ceg]2 | c4 |]\nOpen the cheat sheet with Ctrl+/'}
+              className="min-h-0 flex-1 resize-none bg-white p-4 font-mono text-base leading-relaxed focus:outline-none min-[900px]:text-sm"
+            />
+          )}
           {error && (
             <div
               role="alert"
@@ -659,7 +785,10 @@ export default function App() {
           <div className="print-block min-h-0 flex-1 overflow-y-auto p-4 min-[900px]:p-6">
             <div className="print-block relative mx-auto max-w-5xl rounded bg-white p-4 shadow-sm min-[900px]:p-6">
               <div ref={paperRef} className="score-paper" />
-              {abc.trim() === '' && (
+              {(abc.trim() === '' ||
+                (effectiveMode === 'simple' &&
+                  simple.fields.rh.trim() === '' &&
+                  simple.fields.lh.trim() === '')) && (
                 <p className="py-16 text-center text-sm text-stone-400">
                   Your score will appear here as you type.
                 </p>
@@ -673,7 +802,11 @@ export default function App() {
 
         {/* cheat sheet */}
         {cheatOpen && (
-          <CheatSheet onInsert={insertSnippet} onClose={() => setCheatOpen(false)} />
+          <CheatSheet
+            onInsert={insertSnippet}
+            onClose={() => setCheatOpen(false)}
+            simpleMode={effectiveMode === 'simple'}
+          />
         )}
       </main>
 

@@ -64,10 +64,15 @@ const SECTIONS: Section[] = [
 export default function CheatSheet({
   onInsert,
   onClose,
+  simpleMode = false,
 }: {
   onInsert: (snippet: string, opts?: { kind?: 'music' | 'header' }) => void
   onClose: () => void
+  simpleMode?: boolean
 }) {
+  // In Simple mode headers are toolbar controls and setup lines are hidden,
+  // so those reference sections would only confuse
+  const sections = simpleMode ? SECTIONS.filter((s) => s.heading !== 'Headers') : SECTIONS
   return (
     <aside className="no-print fixed inset-x-0 bottom-0 z-30 max-h-[65vh] overflow-y-auto rounded-t-2xl border-t border-stone-300 bg-stone-50 p-4 shadow-[0_-8px_24px_rgba(0,0,0,0.15)] min-[900px]:static min-[900px]:z-auto min-[900px]:max-h-none min-[900px]:w-72 min-[900px]:shrink-0 min-[900px]:rounded-none min-[900px]:border-t-0 min-[900px]:border-l min-[900px]:border-stone-200 min-[900px]:shadow-none">
       <div className="mb-1 flex items-center justify-between">
@@ -88,6 +93,7 @@ export default function CheatSheet({
         staff. For a 5-minute lesson, open the <span className="font-semibold">Start Here</span>{' '}
         document in the switcher at the top.
       </div>
+      {!simpleMode && (
       <section className="mb-5">
         <h3 className="mb-2 text-xs font-semibold tracking-wide text-stone-500 uppercase">
           Setup lines (top of every doc)
@@ -106,7 +112,8 @@ export default function CheatSheet({
           ))}
         </ul>
       </section>
-      {SECTIONS.map((section) => (
+      )}
+      {sections.map((section) => (
         <section key={section.heading} className="mb-5">
           <h3 className="mb-2 text-xs font-semibold tracking-wide text-stone-500 uppercase">
             {section.heading}
