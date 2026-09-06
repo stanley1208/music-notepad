@@ -66,3 +66,15 @@
     border: none !important;
   }
 }
+
+/* ---- print-only elements (the handout QR) ---- */
+
+.print-only {
+  display: none;
+}
+
+@media print {
+  .print-only {
+    display: block !important;
+  }
+}

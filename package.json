@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "abcjs": "^6.7.0",
+    "qrcode-generator": "^2.0.4",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },

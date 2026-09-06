@@ -5,6 +5,8 @@ import type { CursorControl, SynthObjectController, TuneObject } from 'abcjs'
 import CheatSheet from './CheatSheet'
 import { analyzeAbc, describeRedInk, type Problem } from './problems'
 import { cleanPastedAbc, looksPasted } from './paste'
+import ShareDialog, { QrSvg, qrFits } from './ShareDialog'
+import { shareLink } from './share'
 import SimpleEditor from './SimpleEditor'
 import { buildSimple, parseSimple, type SimpleFields } from './simple'
 import { TEMPLATE_ABC } from './examples'
@@ -48,6 +50,9 @@ export default function App() {
   )
   const [problems, setProblems] = useState<Problem[]>([])
   const [cleanupNote, setCleanupNote] = useState<string | null>(null)
+  const [shareUrl, setShareUrl] = useState<string | null>(null)
+  // A QR printed in the corner of the handout, so paper is playable too
+  const [printQr, setPrintQr] = useState<string | null>(null)
   // First-ever visit: open the cheat sheet so newcomers see the reference exists.
   const [cheatOpen, setCheatOpen] = useState(() => {
     try {
@@ -217,6 +222,14 @@ export default function App() {
     } catch {
       audioRef.current.textContent = 'Audio could not be initialized.'
     }
+    return () => {
+      try {
+        ;(synthRef.current as unknown as { destroy?: () => void } | null)?.destroy?.()
+      } catch {
+        // nothing primed
+      }
+      synthRef.current = null
+    }
   }, [clearHighlights, setTuneFresh])
 
   // ---- live rendering (debounced) ----
@@ -311,6 +324,20 @@ export default function App() {
   useEffect(() => {
     saveDocs(docs)
   }, [docs])
+
+  // The editor can unmount mid-edit (following a share link, for instance),
+  // and the debounced autosave would never fire. Write the pending text out.
+  const pendingRef = useRef({ docs, currentId, abc })
+  pendingRef.current = { docs, currentId, abc }
+  useEffect(() => {
+    return () => {
+      const { docs: d, currentId: id, abc: text } = pendingRef.current
+      const target = d.find((x) => x.id === id)
+      if (target && target.abc !== text) {
+        saveDocs(d.map((x) => (x.id === id ? { ...x, abc: text, updatedAt: Date.now() } : x)))
+      }
+    }
+  }, [])
 
   useEffect(() => {
     saveCurrentId(currentId)
@@ -533,10 +560,44 @@ export default function App() {
     setExportOpen(false)
   }, [currentDoc])
 
-  const printScore = useCallback(() => {
+  const sendToStudent = useCallback(async () => {
     setExportOpen(false)
-    window.print()
-  }, [])
+    try {
+      setShareUrl(await shareLink(abcRef.current, currentDoc?.title ?? 'Exercise'))
+    } catch {
+      setProblems([
+        {
+          severity: 'error',
+          message: 'The share link could not be made.',
+          fix: 'Try again, or use Download .abc to send the file instead.',
+        },
+      ])
+    }
+  }, [currentDoc])
+
+  const printScore = useCallback(async () => {
+    setExportOpen(false)
+    try {
+      const link = await shareLink(abcRef.current, currentDoc?.title ?? 'Exercise')
+      // A piece too long for a QR still prints, just without one
+      if (qrFits(link)) setPrintQr(link)
+      else window.print()
+    } catch {
+      setPrintQr(null)
+      window.print()
+    }
+  }, [currentDoc])
+
+  // Printing waits for the QR to be laid out, then clears it again so it never
+  // shows on screen.
+  useEffect(() => {
+    if (!printQr) return
+    const id = requestAnimationFrame(() => {
+      window.print()
+      setPrintQr(null)
+    })
+    return () => cancelAnimationFrame(id)
+  }, [printQr])
 
   // ---- keyboard shortcuts ----
   useEffect(() => {
@@ -666,6 +727,14 @@ export default function App() {
             </button>
             {exportOpen && (
               <div className="absolute right-0 z-10 mt-1 w-44 rounded border border-stone-200 bg-white py-1 shadow-lg">
+                <button
+                  type="button"
+                  onClick={sendToStudent}
+                  className="block w-full px-3 py-1.5 text-left text-sm font-medium hover:bg-stone-50"
+                >
+                  Send to a student…
+                </button>
+                <div className="my-1 border-t border-stone-200" />
                 <button
                   type="button"
                   onClick={exportAbc}
@@ -866,6 +935,12 @@ export default function App() {
           <div className="print-block min-h-0 flex-1 overflow-y-auto p-4 min-[900px]:p-6">
             <div className="print-block relative mx-auto max-w-5xl rounded bg-white p-4 shadow-sm min-[900px]:p-6">
               <div ref={paperRef} className="score-paper" />
+              {printQr && (
+                <div className="print-only mt-6 text-center">
+                  <QrSvg text={printQr} size={104} />
+                  <div className="mt-1 text-[9px] text-stone-500">Scan to hear it</div>
+                </div>
+              )}
               {(abc.trim() === '' ||
                 (effectiveMode === 'simple' &&
                   simple.fields.rh.trim() === '' &&
@@ -904,6 +979,8 @@ export default function App() {
           </button>
         </div>
       )}
+
+      {shareUrl && <ShareDialog link={shareUrl} onClose={() => setShareUrl(null)} />}
 
       {/* iOS install hint */}
       {showIosHint && (

@@ -50,11 +50,30 @@ export function loadDocs(): Doc[] {
   return seeded
 }
 
-export function saveDocs(docs: Doc[]): void {
+export function saveDocs(docs: Doc[]): boolean {
   try {
     localStorage.setItem(DOCS_KEY, JSON.stringify(docs))
+    return true
   } catch {
     // storage full or unavailable — nothing sensible to do in-app
+    return false
+  }
+}
+
+/**
+ * Write these documents without dropping any that appeared in storage since
+ * they were read — a practice page in another tab can add one, and a whole
+ * array write from the editor would otherwise delete it.
+ */
+export function saveDocsMerging(docs: Doc[]): boolean {
+  try {
+    const raw = localStorage.getItem(DOCS_KEY)
+    const stored = raw ? (JSON.parse(raw) as Doc[]) : []
+    const known = new Set(docs.map((d) => d.id))
+    const appended = Array.isArray(stored) ? stored.filter((d) => d?.id && !known.has(d.id)) : []
+    return saveDocs([...docs, ...appended])
+  } catch {
+    return saveDocs(docs)
   }
 }
 
