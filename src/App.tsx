@@ -3,6 +3,8 @@ import { useRegisterSW } from 'virtual:pwa-register/react'
 import abcjs from 'abcjs'
 import type { CursorControl, SynthObjectController, TuneObject } from 'abcjs'
 import CheatSheet from './CheatSheet'
+import { analyzeAbc, describeRedInk, type Problem } from './problems'
+import { cleanPastedAbc, looksPasted } from './paste'
 import SimpleEditor from './SimpleEditor'
 import { buildSimple, parseSimple, type SimpleFields } from './simple'
 import { TEMPLATE_ABC } from './examples'
@@ -17,10 +19,6 @@ import {
 
 const RENDER_DEBOUNCE_MS = 200
 const SAVE_DEBOUNCE_MS = 500
-
-function stripHtml(s: string): string {
-  return s.replace(/<[^>]*>/g, '').trim()
-}
 
 function safeFilename(title: string): string {
   return (title.trim() || 'untitled').replace(/[\\/:*?"<>|]+/g, '-')
@@ -48,7 +46,8 @@ export default function App() {
   const [abc, setAbc] = useState(
     () => initialRef.current!.docs.find((d) => d.id === initialRef.current!.id)?.abc ?? '',
   )
-  const [error, setError] = useState<string | null>(null)
+  const [problems, setProblems] = useState<Problem[]>([])
+  const [cleanupNote, setCleanupNote] = useState<string | null>(null)
   // First-ever visit: open the cheat sheet so newcomers see the reference exists.
   const [cheatOpen, setCheatOpen] = useState(() => {
     try {
@@ -230,24 +229,46 @@ export default function App() {
         paper.innerHTML = ''
         visualRef.current = null
         setBpm(null)
-        setError(null)
+        setProblems([])
         return
       }
 
       try {
-        // Test-parse into a detached element so a bad edit never clobbers
-        // the last good score.
-        const probe = abcjs.renderAbc(document.createElement('div'), abc, {
-          add_classes: true,
-        })
+        // Everything wrong with the document, in plain English. Runs its own
+        // parse, so the tune handed to the player is never touched by it.
+        const found = analyzeAbc(abc)
+
+        // Engrave into a detached element first, so a bad edit never clobbers
+        // the last good score. The probe also carries the red text the
+        // engraver paints for things it cannot draw, which never reaches
+        // tune.warnings — read it here, or a blocking problem would return
+        // before it was ever looked at.
+        const probeEl = document.createElement('div')
+        const probe = abcjs.renderAbc(probeEl, abc, { add_classes: true })
         const tune = probe[0]
-        const warnings = tune?.warnings
         if (!tune) {
-          setError('No tune found — start with an X:1 header line.')
+          setProblems([
+            {
+              severity: 'error',
+              blocking: true,
+              message: 'No music found in this document.',
+              fix: 'Every tune starts with an X:1 line, and the notes go on a line beginning [V:1].',
+            },
+          ])
           return
         }
-        if (warnings && warnings.length > 0) {
-          setError(warnings.map(stripHtml).join('\n'))
+        const redProblem = describeRedInk(
+          [...probeEl.querySelectorAll('.abcjs-debug-msg')].map((t) => t.textContent ?? ''),
+        )
+        const all = redProblem ? [redProblem, ...found] : found
+
+        // Blocking problems mean the score would not match the text, so the
+        // last good score stays on screen. Advisory ones (bar lengths, hands
+        // out of sync) came from a tune that parsed fine, so it still shows.
+        // With no good score to fall back on, showing an approximate one beats
+        // showing a permanently blank page.
+        if (all.some((p) => p.blocking) && visualRef.current) {
+          setProblems(all)
           return
         }
 
@@ -261,23 +282,17 @@ export default function App() {
         })
         visualRef.current = rendered[0]
         setBpm(Math.round(rendered[0].getBpm()))
-        // abcjs paints text it can't interpret in red (class abcjs-debug-msg)
-        // without reporting a warning — surface it in the strip as words
-        const redInk = [
-          ...new Set(
-            [...paper.querySelectorAll('.abcjs-debug-msg')]
-              .map((t) => (t.textContent ?? '').trim())
-              .filter(Boolean),
-          ),
-        ]
-        setError(
-          redInk.length > 0
-            ? `The score couldn't understand ${redInk.map((m) => `"${m}"`).join(', ')} — it's shown in red on the score. Check that line for typos.`
-            : null,
-        )
+        setProblems(all)
         setTuneFresh(rendered[0])
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e))
+        setProblems([
+          {
+            severity: 'error',
+            blocking: true,
+            message: 'The music could not be drawn.',
+            fix: e instanceof Error ? e.message : String(e),
+          },
+        ])
       }
     }, RENDER_DEBOUNCE_MS)
     return () => clearTimeout(timer)
@@ -332,6 +347,9 @@ export default function App() {
     pendingCaretRef.current = null
     handTouchedRef.current = false
     setAdvancedLatch(false)
+    // problems and the cleanup note belong to the document being left
+    setProblems([])
+    setCleanupNote(null)
   }, [])
 
   const switchDoc = useCallback(
@@ -504,7 +522,13 @@ export default function App() {
         new Blob([midi.slice().buffer as ArrayBuffer], { type: 'audio/midi' }),
       )
     } catch (e) {
-      setError(`MIDI export failed: ${e instanceof Error ? e.message : String(e)}`)
+      setProblems([
+        {
+          severity: 'error',
+          message: 'The MIDI file could not be created.',
+          fix: e instanceof Error ? e.message : String(e),
+        },
+      ])
     }
     setExportOpen(false)
   }, [currentDoc])
@@ -561,7 +585,21 @@ export default function App() {
     }
   }, [editorFocused])
 
-  const errorLines = error ? error.split('\n') : []
+  // A pasted chat answer: offer to clean it up rather than drowning the
+  // person in warnings about words being read as notes.
+  const pasteDetected = looksPasted(abc)
+
+  const cleanUpPaste = useCallback(() => {
+    const { abc: cleaned, changes } = cleanPastedAbc(abcRef.current)
+    setAbc(cleaned)
+    setCleanupNote(`Cleaned up: ${changes.join('; ')}.`)
+  }, [])
+
+  useEffect(() => {
+    if (cleanupNote === null) return
+    const t = setTimeout(() => setCleanupNote(null), 8000)
+    return () => clearTimeout(t)
+  }, [cleanupNote])
 
   return (
     <div className="print-block flex h-screen flex-col bg-stone-100 text-stone-800">
@@ -736,14 +774,57 @@ export default function App() {
               className="min-h-0 flex-1 resize-none bg-white p-4 font-mono text-base leading-relaxed focus:outline-none min-[900px]:text-sm"
             />
           )}
-          {error && (
+          {(problems.length > 0 || pasteDetected || cleanupNote) && (
             <div
-              role="alert"
-              className="max-h-28 shrink-0 overflow-y-auto border-t border-amber-300 bg-amber-100 px-3 py-1.5 font-mono text-xs text-amber-900"
+              role="region"
+              aria-label="Problems with this music"
+              tabIndex={0}
+              className="max-h-44 shrink-0 overflow-y-auto border-t border-amber-300 bg-amber-50 px-3 py-2 text-xs text-stone-800 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-amber-500"
             >
-              {errorLines.map((line, i) => (
-                <div key={i}>{line}</div>
-              ))}
+              {pasteDetected && (
+                <div className="mb-2 flex flex-wrap items-center gap-2 rounded border border-amber-300 bg-amber-100 px-2 py-1.5">
+                  <span className="min-w-40 flex-1">
+                    This looks like it was pasted from a chat, so the words around the music are
+                    being read as notes.
+                  </span>
+                  <button
+                    type="button"
+                    onPointerDown={(e) => e.preventDefault()}
+                    onClick={cleanUpPaste}
+                    className="rounded bg-amber-600 px-2.5 py-1.5 font-medium text-white hover:bg-amber-700"
+                  >
+                    Clean it up
+                  </button>
+                </div>
+              )}
+              {cleanupNote && (
+                <div className="mb-2 rounded border border-green-300 bg-green-50 px-2 py-1.5 text-green-900">
+                  {cleanupNote}
+                </div>
+              )}
+              <ul className="space-y-1.5">
+                {problems.map((p, i) => (
+                  <li key={i} className="flex gap-2">
+                    <span
+                      aria-hidden
+                      className={`mt-1 h-2 w-2 shrink-0 rounded-full ${
+                        p.severity === 'error'
+                          ? 'bg-red-500'
+                          : p.severity === 'warning'
+                            ? 'bg-amber-500'
+                            : 'bg-stone-400'
+                      }`}
+                    />
+                    <span>
+                      <span className="font-medium">{p.message}</span>
+                      {p.fix && <span className="text-stone-600"> {p.fix}</span>}
+                      {p.line !== undefined && (
+                        <span className="text-stone-500"> (line {p.line})</span>
+                      )}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
         </section>
