@@ -1,10 +1,24 @@
 import { SEED_DOCS, TUTORIAL_ABC } from './examples'
 
+/**
+ * What turns a score into this week's homework. All optional: a document that
+ * has never been assigned to anyone still prints, just without the header.
+ */
+export interface Assignment {
+  student: string
+  due: string
+  note: string
+}
+
+export const EMPTY_ASSIGNMENT: Assignment = { student: '', due: '', note: '' }
+
 export interface Doc {
   id: string
   title: string
   abc: string
   updatedAt: number
+  /** absent on every document saved before assignments existed */
+  assignment?: Assignment
 }
 
 const DOCS_KEY = 'music-notepad.docs'

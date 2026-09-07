@@ -77,4 +77,9 @@
   .print-only {
     display: block !important;
   }
+
+  /* a print-only element that needs to lay its children out in a row */
+  .print-only.print-flex {
+    display: flex !important;
+  }
 }

@@ -8,14 +8,18 @@ import { cleanPastedAbc, looksPasted } from './paste'
 import ShareDialog, { QrSvg, qrFits } from './ShareDialog'
 import { shareLink } from './share'
 import SimpleEditor from './SimpleEditor'
+import PianoKit from './PianoKit'
+import AssignmentBar, { AssignmentNotePrint, AssignmentPrint } from './AssignmentBar'
 import { buildSimple, parseSimple, type SimpleFields } from './simple'
 import { TEMPLATE_ABC } from './examples'
 import {
+  EMPTY_ASSIGNMENT,
   loadCurrentId,
   loadDocs,
   newDoc,
   saveCurrentId,
   saveDocs,
+  type Assignment,
   type Doc,
 } from './storage'
 
@@ -51,6 +55,8 @@ export default function App() {
   const [problems, setProblems] = useState<Problem[]>([])
   const [cleanupNote, setCleanupNote] = useState<string | null>(null)
   const [shareUrl, setShareUrl] = useState<string | null>(null)
+  // Hearing one hand at a time while writing, the same way the practice page does
+  const [editorHands, setEditorHands] = useState<'both' | 'right' | 'left'>('both')
   // A QR printed in the corner of the handout, so paper is playable too
   const [printQr, setPrintQr] = useState<string | null>(null)
   // First-ever visit: open the cheat sheet so newcomers see the reference exists.
@@ -156,18 +162,29 @@ export default function App() {
   // isLoaded flag, so once any tune has been primed, Play keeps replaying the old
   // audio buffer (and a dead cursor) no matter what setTune was given since.
   // Force a re-prime: drop the old buffer/timer and clear the flag ourselves.
-  const setTuneFresh = useCallback((visual: TuneObject) => {
-    const ctrl = synthRef.current
-    if (!ctrl) return
-    const internals = ctrl as unknown as { destroy(): void; isLoaded: boolean }
-    try {
-      internals.destroy()
-    } catch {
-      // nothing primed yet
-    }
-    internals.isLoaded = false
-    ctrl.setTune(visual, false).catch(() => {})
-  }, [])
+  const setTuneFresh = useCallback(
+    (visual: TuneObject) => {
+      const ctrl = synthRef.current
+      if (!ctrl) return
+      const internals = ctrl as unknown as {
+        destroy(): void
+        isLoaded: boolean
+        isLoading: boolean
+      }
+      try {
+        internals.destroy()
+      } catch {
+        // nothing primed yet
+      }
+      internals.isLoaded = false
+      internals.isLoading = false
+      // voicesOff silences a staff without removing its notes, so the score
+      // still shows both hands and the cursor still runs through everything
+      const voicesOff = editorHands === 'right' ? [1] : editorHands === 'left' ? [0] : undefined
+      ctrl.setTune(visual, false, voicesOff ? { voicesOff } : {}).catch(() => {})
+    },
+    [editorHands],
+  )
 
   useEffect(() => {
     try {
@@ -309,7 +326,7 @@ export default function App() {
       }
     }, RENDER_DEBOUNCE_MS)
     return () => clearTimeout(timer)
-  }, [abc, renderNonce, setTuneFresh])
+  }, [abc, renderNonce, editorHands, setTuneFresh])
 
   // ---- autosave (debounced) ----
   useEffect(() => {
@@ -428,6 +445,23 @@ export default function App() {
     [currentId],
   )
 
+  const setAssignment = useCallback(
+    (patch: Partial<Assignment>) => {
+      setDocs((prev) =>
+        prev.map((d) =>
+          d.id === currentId
+            ? {
+                ...d,
+                assignment: { ...EMPTY_ASSIGNMENT, ...d.assignment, ...patch },
+                updatedAt: Date.now(),
+              }
+            : d,
+        ),
+      )
+    },
+    [currentId],
+  )
+
   // ---- snippet insertion (cheat sheet + mobile key bar) ----
   // The caret is applied in an effect AFTER React commits the new value;
   // setting it earlier races the controlled-textarea update, which resets the
@@ -468,12 +502,12 @@ export default function App() {
           : handText.length
         const end = handTouchedRef.current ? (ta?.selectionEnd ?? start) : handText.length
         pendingCaretRef.current = { target: hand, pos: start + (opts?.caretOffset ?? snippet.length) }
-        setAbc(
-          buildSimple({
-            ...parsed.fields,
-            [hand]: handText.slice(0, start) + snippet + handText.slice(end),
-          }),
-        )
+        const next = buildSimple({
+          ...parsed.fields,
+          [hand]: handText.slice(0, start) + snippet + handText.slice(end),
+        })
+        abcRef.current = next
+        setAbc(next)
         return
       }
 
@@ -518,6 +552,34 @@ export default function App() {
       ta.selectionStart = ta.selectionEnd = pos
     }
   }, [abc])
+
+  /** Put text into one specific hand, wherever the caret is in it. */
+  const insertIntoHand = useCallback((hand: 'rh' | 'lh', text: string) => {
+    const parsed = parseSimple(abcRef.current)
+    if (!parsed.compatible) return
+    const handText = parsed.fields[hand]
+    const ta = (hand === 'rh' ? rhRef : lhRef).current
+    // Only trust the caret when this hand is the one being typed in; a
+    // never-focused box reports position 0, which would prepend.
+    const useCaret = handTouchedRef.current && activeHandRef.current === hand
+    const start = useCaret ? (ta?.selectionStart ?? handText.length) : handText.length
+    const end = useCaret ? (ta?.selectionEnd ?? start) : handText.length
+    // keep the music readable: one space between what is there and what arrives
+    const before = handText.slice(0, start)
+    const needsSpace = before !== '' && !/\s$/.test(before)
+    const insert = (needsSpace ? ' ' : '') + text
+    activeHandRef.current = hand
+    pendingCaretRef.current = { target: hand, pos: start + insert.length }
+    const next = buildSimple({
+      ...parsed.fields,
+      [hand]: before + insert + handText.slice(end),
+    })
+    // The ref is normally refreshed during render, which has not happened yet:
+    // two kit buttons tapped in the same tick would otherwise both read the
+    // text from before either of them, and the first insertion would vanish.
+    abcRef.current = next
+    setAbc(next)
+  }, [])
 
   // ---- playback ----
   const togglePlay = useCallback(() => {
@@ -713,6 +775,28 @@ export default function App() {
         >
           ▶ Play / Pause
         </button>
+        <div className="flex items-center gap-1" role="group" aria-label="Which hands to play">
+          {(['both', 'right', 'left'] as const).map((h) => (
+            <button
+              key={h}
+              type="button"
+              onClick={() => setEditorHands(h)}
+              aria-pressed={editorHands === h}
+              title={
+                h === 'both'
+                  ? 'Play both hands'
+                  : `Play only the ${h} hand — the other one stays silent`
+              }
+              className={`rounded px-2 py-2 text-xs font-medium min-[900px]:py-1 ${
+                editorHands === h
+                  ? 'bg-amber-100 text-amber-900 ring-1 ring-amber-300'
+                  : 'text-stone-500 hover:bg-stone-100'
+              }`}
+            >
+              {h === 'both' ? 'Both' : h === 'right' ? 'R' : 'L'}
+            </button>
+          ))}
+        </div>
         {bpm !== null && <span className="text-sm text-stone-500">♩ = {bpm}</span>}
         {savedAt !== null && <span className="text-xs text-stone-400">Saved</span>}
 
@@ -818,7 +902,15 @@ export default function App() {
             )}
           </div>
           {effectiveMode === 'simple' ? (
-            <SimpleEditor
+            <>
+              <PianoKit
+                musicKey={simple.fields.key}
+                meter={simple.fields.meter}
+                unit={simple.fields.unit}
+                onInsert={(text: string) => insertSnippet(text)}
+                onInsertHand={insertIntoHand}
+              />
+              <SimpleEditor
               fields={simple.fields}
               onChange={changeSimple}
               rhRef={rhRef}
@@ -828,8 +920,9 @@ export default function App() {
                 handTouchedRef.current = true
                 setEditorFocused(true)
               }}
-              onHandBlur={() => setEditorFocused(false)}
-            />
+                onHandBlur={() => setEditorFocused(false)}
+              />
+            </>
           ) : (
             <textarea
               ref={textareaRef}
@@ -896,6 +989,10 @@ export default function App() {
               </ul>
             </div>
           )}
+          <AssignmentBar
+            assignment={{ ...EMPTY_ASSIGNMENT, ...currentDoc?.assignment }}
+            onChange={setAssignment}
+          />
         </section>
 
         {/* one-tap ABC symbols while typing on a phone */}
@@ -934,7 +1031,9 @@ export default function App() {
         <section className="print-block order-1 flex min-h-0 flex-1 flex-col min-[900px]:order-2">
           <div className="print-block min-h-0 flex-1 overflow-y-auto p-4 min-[900px]:p-6">
             <div className="print-block relative mx-auto max-w-5xl rounded bg-white p-4 shadow-sm min-[900px]:p-6">
+              <AssignmentPrint assignment={{ ...EMPTY_ASSIGNMENT, ...currentDoc?.assignment }} />
               <div ref={paperRef} className="score-paper" />
+              <AssignmentNotePrint assignment={{ ...EMPTY_ASSIGNMENT, ...currentDoc?.assignment }} />
               {printQr && (
                 <div className="print-only mt-6 text-center">
                   <QrSvg text={printQr} size={104} />
