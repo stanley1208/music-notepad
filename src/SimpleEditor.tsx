@@ -1,13 +1,41 @@
 import type { RefObject } from 'react'
+import type { EditSource } from './history'
 import { KEY_CHOICES, METER_CHOICES, type SimpleFields } from './simple'
 
 interface Props {
   fields: SimpleFields
-  onChange: (patch: Partial<SimpleFields>) => void
+  /**
+   * `source` separates a run of keystrokes in one box, which undo should take
+   * back together, from a single deliberate change like emptying a hand.
+   */
+  onChange: (patch: Partial<SimpleFields>, source?: EditSource) => void
   rhRef: RefObject<HTMLTextAreaElement | null>
   lhRef: RefObject<HTMLTextAreaElement | null>
   onHandFocus: (hand: 'rh' | 'lh') => void
   onHandBlur: () => void
+}
+
+/** Empties one hand. Safe to press by mistake: undo puts it straight back. */
+function ClearHand({
+  label,
+  disabled,
+  onClear,
+}: {
+  label: string
+  disabled: boolean
+  onClear: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClear}
+      disabled={disabled}
+      aria-label={`Clear the ${label}`}
+      className="ml-auto rounded px-1.5 py-0.5 text-[11px] font-normal text-stone-400 hover:bg-stone-100 hover:text-stone-700 disabled:invisible"
+    >
+      Clear
+    </button>
+  )
 }
 
 export default function SimpleEditor({
@@ -71,11 +99,18 @@ export default function SimpleEditor({
       </div>
 
       <label className="flex min-h-0 flex-1 flex-col gap-1 text-xs font-medium text-stone-500">
-        Right hand (treble) — notes: C D E F G A B, chords: [CEG], barline: |
+        <span className="flex items-center gap-2">
+          Right hand (treble) — notes: C D E F G A B, chords: [CEG], barline: |
+          <ClearHand
+            label="right hand"
+            disabled={fields.rh.trim() === ''}
+            onClear={() => onChange({ rh: '' })}
+          />
+        </span>
         <textarea
           ref={rhRef}
           value={fields.rh}
-          onChange={(e) => onChange({ rh: e.target.value })}
+          onChange={(e) => onChange({ rh: e.target.value }, 'type:rh')}
           onFocus={() => onHandFocus('rh')}
           onBlur={onHandBlur}
           spellCheck={false}
@@ -84,11 +119,18 @@ export default function SimpleEditor({
         />
       </label>
       <label className="flex min-h-0 flex-1 flex-col gap-1 text-xs font-medium text-stone-500">
-        Left hand (bass) — a comma lowers the octave: C, G,
+        <span className="flex items-center gap-2">
+          Left hand (bass) — a comma lowers the octave: C, G,
+          <ClearHand
+            label="left hand"
+            disabled={fields.lh.trim() === ''}
+            onClear={() => onChange({ lh: '' })}
+          />
+        </span>
         <textarea
           ref={lhRef}
           value={fields.lh}
-          onChange={(e) => onChange({ lh: e.target.value })}
+          onChange={(e) => onChange({ lh: e.target.value }, 'type:lh')}
           onFocus={() => onHandFocus('lh')}
           onBlur={onHandBlur}
           spellCheck={false}

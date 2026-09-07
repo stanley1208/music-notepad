@@ -4,6 +4,16 @@ import abcjs from 'abcjs'
 import type { CursorControl, SynthObjectController, TuneObject } from 'abcjs'
 import CheatSheet from './CheatSheet'
 import { analyzeAbc, describeRedInk, type Problem } from './problems'
+import {
+  canRedo as historyCanRedo,
+  canUndo as historyCanUndo,
+  emptyHistory,
+  record,
+  redo as redoText,
+  undo as undoText,
+  type EditSource,
+  type History,
+} from './history'
 import { cleanPastedAbc, looksPasted } from './paste'
 import ShareDialog, { QrSvg, qrFits } from './ShareDialog'
 import { shareLink } from './share'
@@ -57,6 +67,10 @@ export default function App() {
   const [shareUrl, setShareUrl] = useState<string | null>(null)
   // Hearing one hand at a time while writing, the same way the practice page does
   const [editorHands, setEditorHands] = useState<'both' | 'right' | 'left'>('both')
+  // Undo history for the document text. Held in a ref because it is written on
+  // every keystroke; the tick only exists to re-render the two toolbar buttons.
+  const historyRef = useRef<History>(emptyHistory())
+  const [historyTick, setHistoryTick] = useState(0)
   // A QR printed in the corner of the handout, so paper is playable too
   const [printQr, setPrintQr] = useState<string | null>(null)
   // First-ever visit: open the cheat sheet so newcomers see the reference exists.
@@ -149,13 +163,95 @@ export default function App() {
     if (editorMode === 'simple' && !simple.compatible) setAdvancedLatch(true)
   }, [editorMode, simple.compatible])
 
-  const changeSimple = useCallback(
-    (patch: Partial<SimpleFields>) => {
-      const parsed = parseSimple(abcRef.current)
-      if (!parsed.compatible) return
-      setAbc(buildSimple({ ...parsed.fields, ...patch }))
+  /**
+   * Every change to the document text goes through here, so there is exactly
+   * one place that knows how to take it back. `kind` decides whether it joins
+   * the keystroke that came before it or becomes an undo step of its own.
+   */
+  const commitAbc = useCallback((next: string, source: EditSource = 'action') => {
+    const previous = abcRef.current
+    if (next === previous) return
+    record(historyRef.current, previous, next, source, Date.now())
+    // The ref is normally refreshed during render, which has not happened yet:
+    // two buttons pressed in the same tick would otherwise both read the text
+    // from before either of them, and the first change would vanish.
+    abcRef.current = next
+    setAbc(next)
+    setHistoryTick((n) => n + 1)
+  }, [])
+
+  /**
+   * Where to put the caret after stepping through history: at the first
+   * character where the two versions differ, which is where the change being
+   * taken back actually was. Assigning a controlled textarea's value otherwise
+   * drops the caret to the very end, and the next thing typed lands at the
+   * bottom of the score.
+   */
+  const caretForJump = useCallback(
+    (from: string, to: string): { target: 'main' | 'rh' | 'lh'; pos: number } | null => {
+      // Leave focus alone unless they were already working in the music. On a
+      // phone, focusing a box nobody asked for throws the keyboard open.
+      const el = document.activeElement
+      const inMusic = el === textareaRef.current || el === rhRef.current || el === lhRef.current
+      if (!inMusic) return null
+
+      const shared = (a: string, b: string) => {
+        const n = Math.min(a.length, b.length)
+        let i = 0
+        while (i < n && a[i] === b[i]) i++
+        return i
+      }
+      if (modeRef.current === 'advanced') return { target: 'main', pos: shared(from, to) }
+      const before = parseSimple(from)
+      const after = parseSimple(to)
+      if (!before.compatible || !after.compatible) return null
+      for (const hand of ['rh', 'lh'] as const) {
+        if (before.fields[hand] !== after.fields[hand]) {
+          return { target: hand, pos: shared(before.fields[hand], after.fields[hand]) }
+        }
+      }
+      // only a header moved: nothing in either hand to point at
+      return null
     },
     [],
+  )
+
+  const jumpTo = useCallback(
+    (text: string) => {
+      pendingCaretRef.current = caretForJump(abcRef.current, text)
+      abcRef.current = text
+      setAbc(text)
+      // the clean-up receipt describes an edit no longer in the document
+      setCleanupNote(null)
+      setHistoryTick((n) => n + 1)
+    },
+    [caretForJump],
+  )
+
+  const undoEdit = useCallback(() => {
+    const previous = undoText(historyRef.current, abcRef.current)
+    if (previous === null) return
+    jumpTo(previous)
+  }, [jumpTo])
+
+  const redoEdit = useCallback(() => {
+    const next = redoText(historyRef.current, abcRef.current)
+    if (next === null) return
+    jumpTo(next)
+  }, [jumpTo])
+
+  // read during render so the toolbar buttons enable and disable with the stack
+  void historyTick
+  const canUndo = historyCanUndo(historyRef.current, abc)
+  const canRedo = historyCanRedo(historyRef.current, abc)
+
+  const changeSimple = useCallback(
+    (patch: Partial<SimpleFields>, source: EditSource = 'action') => {
+      const parsed = parseSimple(abcRef.current)
+      if (!parsed.compatible) return
+      commitAbc(buildSimple({ ...parsed.fields, ...patch }), source)
+    },
+    [commitAbc],
   )
 
   // abcjs 6.7: SynthController.setTune(visual, false) never clears the internal
@@ -394,6 +490,10 @@ export default function App() {
     // problems and the cleanup note belong to the document being left
     setProblems([])
     setCleanupNote(null)
+    // so does the undo history: undoing into another document's text would
+    // silently overwrite this one
+    historyRef.current = emptyHistory()
+    setHistoryTick((n) => n + 1)
   }, [])
 
   const switchDoc = useCallback(
@@ -502,12 +602,12 @@ export default function App() {
           : handText.length
         const end = handTouchedRef.current ? (ta?.selectionEnd ?? start) : handText.length
         pendingCaretRef.current = { target: hand, pos: start + (opts?.caretOffset ?? snippet.length) }
-        const next = buildSimple({
-          ...parsed.fields,
-          [hand]: handText.slice(0, start) + snippet + handText.slice(end),
-        })
-        abcRef.current = next
-        setAbc(next)
+        commitAbc(
+          buildSimple({
+            ...parsed.fields,
+            [hand]: handText.slice(0, start) + snippet + handText.slice(end),
+          }),
+        )
         return
       }
 
@@ -536,7 +636,7 @@ export default function App() {
       }
 
       pendingCaretRef.current = { target: 'main', pos: start + caretInInsert }
-      setAbc(text.slice(0, start) + insertText + text.slice(end))
+      commitAbc(text.slice(0, start) + insertText + text.slice(end))
     },
     [],
   )
@@ -550,6 +650,11 @@ export default function App() {
     if (ta) {
       ta.focus()
       ta.selectionStart = ta.selectionEnd = pos
+      // A kit button appends several bars to a box that may already be
+      // scrolled away, and an insertion nobody can see is how a document
+      // quietly turns into a mess. Anywhere else the caret was already in
+      // view, because the person was typing there.
+      if (pos >= ta.value.length) ta.scrollTop = ta.scrollHeight
     }
   }, [abc])
 
@@ -570,16 +675,13 @@ export default function App() {
     const insert = (needsSpace ? ' ' : '') + text
     activeHandRef.current = hand
     pendingCaretRef.current = { target: hand, pos: start + insert.length }
-    const next = buildSimple({
-      ...parsed.fields,
-      [hand]: before + insert + handText.slice(end),
-    })
-    // The ref is normally refreshed during render, which has not happened yet:
-    // two kit buttons tapped in the same tick would otherwise both read the
-    // text from before either of them, and the first insertion would vanish.
-    abcRef.current = next
-    setAbc(next)
-  }, [])
+    commitAbc(
+      buildSimple({
+        ...parsed.fields,
+        [hand]: before + insert + handText.slice(end),
+      }),
+    )
+  }, [commitAbc])
 
   // ---- playback ----
   const togglePlay = useCallback(() => {
@@ -665,7 +767,29 @@ export default function App() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey)) return
-      if (e.key === 'Enter') {
+      const undoKey = e.key === 'z' || e.key === 'Z'
+      if (undoKey || e.key === 'y' || e.key === 'Y') {
+        // The music boxes are rewritten from state by every button, which
+        // destroys the browser's own undo inside them — those we take over.
+        // Every other field (the title, a student's name, a practice note) is
+        // only ever edited by hand, so its native undo still works and stealing
+        // Ctrl+Z there would change the music instead of the word being typed.
+        // A dialog is a decision in progress. The share dialog in particular
+        // holds a link and a QR frozen from the text as it was when it opened;
+        // changing the document underneath them would hand a student music the
+        // teacher no longer has.
+        if (document.querySelector('[aria-modal="true"]')) return
+        const el = document.activeElement
+        const isMusicBox =
+          el === textareaRef.current || el === rhRef.current || el === lhRef.current
+        const isOwnField =
+          el instanceof HTMLElement &&
+          (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
+        if (isOwnField && !isMusicBox) return
+        e.preventDefault()
+        if (undoKey && !e.shiftKey) undoEdit()
+        else redoEdit()
+      } else if (e.key === 'Enter') {
         e.preventDefault()
         togglePlay()
       } else if (e.key === 's') {
@@ -679,7 +803,7 @@ export default function App() {
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [togglePlay, flushCurrent])
+  }, [togglePlay, flushCurrent, undoEdit, redoEdit])
 
   useEffect(() => {
     if (savedAt === null) return
@@ -714,7 +838,7 @@ export default function App() {
 
   const cleanUpPaste = useCallback(() => {
     const { abc: cleaned, changes } = cleanPastedAbc(abcRef.current)
-    setAbc(cleaned)
+    commitAbc(cleaned)
     setCleanupNote(`Cleaned up: ${changes.join('; ')}.`)
   }, [])
 
@@ -764,6 +888,34 @@ export default function App() {
         >
           Delete
         </button>
+
+        <div className="mx-1 h-5 w-px bg-stone-200" aria-hidden />
+
+        {/* Buttons, not just Ctrl+Z: on a phone there is no keyboard to press */}
+        <div className="flex items-center gap-1" role="group" aria-label="Undo and redo">
+          <button
+            type="button"
+            onPointerDown={(e) => e.preventDefault()}
+            onClick={undoEdit}
+            disabled={!canUndo}
+            title="Undo (Ctrl+Z)"
+            aria-label="Undo"
+            className="rounded px-2 py-2 text-sm text-stone-600 hover:bg-stone-100 disabled:text-stone-300 disabled:hover:bg-transparent min-[900px]:py-1"
+          >
+            ↶
+          </button>
+          <button
+            type="button"
+            onPointerDown={(e) => e.preventDefault()}
+            onClick={redoEdit}
+            disabled={!canRedo}
+            title="Redo (Ctrl+Shift+Z)"
+            aria-label="Redo"
+            className="rounded px-2 py-2 text-sm text-stone-600 hover:bg-stone-100 disabled:text-stone-300 disabled:hover:bg-transparent min-[900px]:py-1"
+          >
+            ↷
+          </button>
+        </div>
 
         <div className="mx-1 h-5 w-px bg-stone-200" aria-hidden />
 
@@ -927,7 +1079,7 @@ export default function App() {
             <textarea
               ref={textareaRef}
               value={abc}
-              onChange={(e) => setAbc(e.target.value)}
+              onChange={(e) => commitAbc(e.target.value, 'type:main')}
               onFocus={() => setEditorFocused(true)}
               onBlur={() => setEditorFocused(false)}
               spellCheck={false}
